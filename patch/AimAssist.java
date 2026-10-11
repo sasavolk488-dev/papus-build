@@ -29,14 +29,24 @@ public class AimAssist extends Module {
     private final ValueSetting distanceSetting;
     private final ValueSetting fovSetting;
     private final ValueSetting aimHeightSetting;
+    private final ValueSetting smoothSetting;
+    private final ValueSetting reactionSetting;
+    private final BooleanSetting humanizeSetting;
     private final BooleanSetting testSetting;
     private final MultiSelectSetting targetsSetting;
 
     private final Random random = new Random();
+
+    // шум / дрожь
     private float noiseYaw;
     private float noisePitch;
-    private float speedFactor;
     private long lastNoiseUpdate;
+
+    // плавность — интерполяция и реакция
+    private LivingEntity lastTarget;
+    private long targetAcquiredAt;
+    private float accumulatedYaw;
+    private float accumulatedPitch;
 
     public AimAssist() {
         super("AimAssist", "Aim Assist", ModuleCategory.PLAYER);
@@ -46,6 +56,9 @@ public class AimAssist extends Module {
         this.distanceSetting = new ValueSetting("Дистанция", "").setValue(3.0F).range(2, 8);
         this.fovSetting = new ValueSetting("Поле зрения", "").setValue(180.0F).range(10, 360);
         this.aimHeightSetting = new ValueSetting("Высота наводки", "").setValue(0.5F).range(0.0F, 1.0F);
+        this.smoothSetting = new ValueSetting("Плавность", "").setValue(0.35F).range(0.05F, 1.0F);
+        this.reactionSetting = new ValueSetting("Реакция (мс)", "").setValue(120.0F).range(0.0F, 400.0F);
+        this.humanizeSetting = new BooleanSetting("Humanize", "").setValue(true);
         this.testSetting = new BooleanSetting("Test", "").setValue(false);
         this.targetsSetting = new MultiSelectSetting("Таргеты", "").value("Игроки", "Мобы", "Друзья");
 
@@ -55,6 +68,9 @@ public class AimAssist extends Module {
             this.distanceSetting,
             this.fovSetting,
             this.aimHeightSetting,
+            this.smoothSetting,
+            this.reactionSetting,
+            this.humanizeSetting,
             this.testSetting,
             this.targetsSetting
         );
@@ -62,106 +78,198 @@ public class AimAssist extends Module {
         this.targetsSetting.getSelected().add("Игроки");
     }
 
+    @Override
+    public void deactivate() {
+        lastTarget = null;
+        targetAcquiredAt = 0L;
+        accumulatedYaw = 0.0F;
+        accumulatedPitch = 0.0F;
+        super.deactivate();
+    }
+
     @EventHandler
-    public void onMouseRotation(MouseRotationEvent var1) {
+    public void onMouseRotation(MouseRotationEvent event) {
         if (this.isSilent()) return;
         if (mc.player == null || mc.world == null) return;
 
-        LivingEntity var2 = this.findTarget();
-        if (var2 == null) return;
+        LivingEntity target = this.findTarget();
 
-        this.resetTarget();
+        // сброс при потере цели
+        if (target == null) {
+            lastTarget = null;
+            targetAcquiredAt = 0L;
+            return;
+        }
 
-        Vec3d var3 = mc.player.getPos().add(0.0, mc.player.getHeight(), 0.0);
-        float var4 = this.aimHeightSetting.getValue() + this.noisePitch;
-        float var5 = this.noiseYaw;
+        // новая цель — фиксируем время захвата (для реакции)
+        if (target != lastTarget) {
+            lastTarget = target;
+            targetAcquiredAt = System.currentTimeMillis();
+        }
 
-        Vec3d var6 = var2.getPos().add(var5, var2.getHeight() * var4, 0.0);
-        Vec3d var7 = var6.subtract(var3);
+        // === РЕАКЦИЯ ===
+        long reactionDelay = (long) reactionSetting.getValue();
+        if (humanizeSetting.isValue()) {
+            reactionDelay += random.nextInt(60) - 30; // ±30мс разброс
+        }
+        if (reactionDelay > 0 && System.currentTimeMillis() - targetAcquiredAt < reactionDelay) {
+            return;
+        }
 
-        float var8 = (float) Math.toDegrees(Math.atan2(var7.z, var7.x)) - 90.0F;
-        float var9 = (float) (-Math.toDegrees(Math.atan2(var7.y, Math.sqrt(var7.x * var7.x + var7.z * var7.z))));
+        this.updateNoise();
 
-        Angle var10 = AngleUtil.cameraAngle();
-        float var11 = var8 - var10.getYaw();
-        var11 = ((var11 + 180.0F) % 360.0F + 360.0F) % 360.0F - 180.0F;
+        Vec3d eye = mc.player.getPos().add(0.0, mc.player.getHeight(), 0.0);
 
-        float var12 = var9 - var10.getPitch();
-        var12 = ((var12 + 180.0F) % 360.0F + 360.0F) % 360.0F - 180.0F;
+        float heightMul = this.aimHeightSetting.getValue()
+                + (humanizeSetting.isValue() ? noisePitch : 0.0F);
 
-        if (Math.abs(var11) > this.fovSetting.getValue() / 2.0F) return;
+        // прицел слегка наводится на разные части (немного смещаем точку)
+        Vec3d aimPos = target.getPos().add(
+            humanizeSetting.isValue() ? noiseYaw : 0.0,
+            target.getHeight() * heightMul,
+            humanizeSetting.isValue() ? noiseYaw * 0.5F : 0.0
+        );
 
-        if (this.testSetting.isValue() || Math.abs(var11) >= 2.0F || Math.abs(var12) >= 2.0F) {
-            float var13 = this.speedXSetting.getValue() / 40.0F;
-            var11 = MathHelper.clamp(var11, -20.0F, 20.0F);
-            float var15 = var11 * var13 * 10.0F;
+        Vec3d diff = aimPos.subtract(eye);
 
-            float var16 = this.speedYSetting.getValue() / 40.0F;
-            var12 = MathHelper.clamp(var12, -20.0F, 20.0F);
-            float var18 = var12 * var16 * 10.0F;
+        float targetYaw = (float) Math.toDegrees(Math.atan2(diff.z, diff.x)) - 90.0F;
+        float targetPitch = (float) -Math.toDegrees(Math.atan2(
+                diff.y, Math.sqrt(diff.x * diff.x + diff.z * diff.z)));
 
-            var1.setCursorDeltaX(var1.getCursorDeltaX() + (float) ((int) var15));
-            var1.setCursorDeltaY(var1.getCursorDeltaY() + (float) ((int) var18));
+        Angle cam = AngleUtil.cameraAngle();
+
+        float yawDelta = normalize(targetYaw - cam.getYaw());
+        float pitchDelta = normalize(targetPitch - cam.getPitch());
+
+        if (Math.abs(yawDelta) > fovSetting.getValue() / 2.0F) return;
+
+        // мёртвая зона — если уже наведено, не дёргаем
+        if (!testSetting.isValue()
+                && Math.abs(yawDelta) < 1.5F
+                && Math.abs(pitchDelta) < 1.5F) {
+            return;
+        }
+
+        // === ПЛАВНОЕ ДВИЖЕНИЕ ===
+        // ease-in-out: ближе к цели — медленнее, дальше — быстрее
+        float smooth = smoothSetting.getValue();
+
+        float yawStep = easeStep(yawDelta, smooth);
+        float pitchStep = easeStep(pitchDelta, smooth);
+
+        // масштаб скорости от настроек
+        float sx = speedXSetting.getValue() / 40.0F;
+        float sy = speedYSetting.getValue() / 40.0F;
+
+        yawStep *= sx;
+        pitchStep *= sy;
+
+        // === ДЖИТТЕР ===
+        if (humanizeSetting.isValue()) {
+            yawStep += (random.nextFloat() - 0.5F) * 0.4F;
+            pitchStep += (random.nextFloat() - 0.5F) * 0.25F;
+        }
+
+        // === НАКОПЛЕНИЕ и ОТПРАВКА ===
+        accumulatedYaw += yawStep;
+        accumulatedPitch += pitchStep;
+
+        int sendX = (int) accumulatedYaw;
+        int sendY = (int) accumulatedPitch;
+
+        if (sendX != 0 || sendY != 0) {
+            event.setCursorDeltaX(event.getCursorDeltaX() + (float) sendX);
+            event.setCursorDeltaY(event.getCursorDeltaY() + (float) sendY);
+
+            accumulatedYaw -= sendX;
+            accumulatedPitch -= sendY;
         }
     }
 
-    private void resetTarget() {
-        long var1 = System.currentTimeMillis();
-        if (var1 - this.lastNoiseUpdate > 200L) {
-            this.noiseYaw = (this.random.nextFloat() - 0.5F) * 0.4F;
-            this.noisePitch = (this.random.nextFloat() - 0.5F) * 0.3F;
-            this.speedFactor = 0.3F + this.random.nextFloat() * 0.7F;
-            this.lastNoiseUpdate = var1;
+    /**
+     * Ease-in-out движение: чем меньше разница, тем медленнее подходим.
+     * Имитирует человеческое движение мышью.
+     */
+    private float easeStep(float delta, float smooth) {
+        float abs = Math.abs(delta);
+
+        // нелинейная скорость
+        float factor;
+        if (abs > 30.0F) {
+            factor = 1.0F;          // далеко — быстро
+        } else if (abs > 10.0F) {
+            factor = 0.75F;         // средне
+        } else if (abs > 3.0F) {
+            factor = 0.5F;          // близко — точнее
+        } else {
+            factor = 0.3F;          // почти наведено — медленно
         }
-        if (!this.testSetting.isValue()) {
-            this.noiseYaw = 0.0F;
-            this.noisePitch = 0.0F;
+
+        // ускорение ближе к концу (эффект доводки)
+        float eased = delta * factor * smooth;
+
+        // ограничение, чтобы не рывками
+        float max = 30.0F;
+        return MathHelper.clamp(eased, -max, max);
+    }
+
+    private void updateNoise() {
+        long now = System.currentTimeMillis();
+        if (now - lastNoiseUpdate > 200L) {
+            noiseYaw = (random.nextFloat() - 0.5F) * 0.35F;
+            noisePitch = (random.nextFloat() - 0.5F) * 0.25F;
+            lastNoiseUpdate = now;
         }
+    }
+
+    private static float normalize(float angle) {
+        angle = angle % 360.0F;
+        if (angle >= 180.0F) angle -= 360.0F;
+        if (angle < -180.0F) angle += 360.0F;
+        return angle;
     }
 
     private LivingEntity findTarget() {
-        LivingEntity var1 = null;
-        float var2 = Float.MAX_VALUE;
-        Angle var3 = AngleUtil.cameraAngle();
+        LivingEntity best = null;
+        float bestScore = Float.MAX_VALUE;
+        Angle camera = AngleUtil.cameraAngle();
 
-        for (Entity var5 : mc.world.getEntities()) {
-            if (!(var5 instanceof LivingEntity var6)) continue;
-            if (var6 == mc.player) continue;
-            if (!var6.isAlive()) continue;
-            if (var6 instanceof ArmorStandEntity) continue;
-            if (var6.distanceTo(mc.player) > this.distanceSetting.getValue()) continue;
+        for (Entity entity : mc.world.getEntities()) {
+            if (!(entity instanceof LivingEntity living)) continue;
+            if (living == mc.player) continue;
+            if (!living.isAlive()) continue;
+            if (living instanceof ArmorStandEntity) continue;
+            if (living.distanceTo(mc.player) > distanceSetting.getValue()) continue;
 
-            if (var6 instanceof PlayerEntity) {
-                if (!this.targetsSetting.isSelected("Игроки")) continue;
-                boolean var7 = FriendUtils.getFriends().stream()
-                    .anyMatch(var1x -> var1x.getName().equals(var6.getName().getString()));
-                if (var7 && !this.targetsSetting.isSelected("Друзья")) continue;
+            if (living instanceof PlayerEntity player) {
+                if (!targetsSetting.isSelected("Игроки")) continue;
+                boolean isFriend = FriendUtils.getFriends().stream()
+                        .anyMatch(f -> f.getName().equals(player.getName().getString()));
+                if (isFriend && !targetsSetting.isSelected("Друзья")) continue;
             } else {
-                if (!this.targetsSetting.isSelected("Мобы")) continue;
+                if (!targetsSetting.isSelected("Мобы")) continue;
             }
 
-            Vec3d var15 = mc.player.getPos().add(0.0, mc.player.getHeight(), 0.0);
-            Vec3d var8 = var6.getPos().add(0.0, var6.getHeight() * 0.7, 0.0);
+            Vec3d eye = mc.player.getPos().add(0.0, mc.player.getHeight(), 0.0);
+            Vec3d tpos = living.getPos().add(0.0, living.getHeight() * 0.7, 0.0);
 
-            RaycastContext var9 = new RaycastContext(var15, var8, ShapeType.COLLIDER, FluidHandling.NONE, mc.player);
-            if (mc.world.raycast(var9).getType() != Type.MISS) continue;
+            RaycastContext ctx = new RaycastContext(
+                    eye, tpos, ShapeType.COLLIDER, FluidHandling.NONE, mc.player);
+            if (mc.world.raycast(ctx).getType() != Type.MISS) continue;
 
-            Vec3d var10 = var8.subtract(var15);
-            float var11 = (float) Math.toDegrees(Math.atan2(var10.z, var10.x)) - 90.0F;
-            float var12 = Math.abs(var11 - var3.getYaw());
-            var12 = ((var12 + 180.0F) % 360.0F + 360.0F) % 360.0F - 180.0F;
-            var12 = Math.abs(var12);
+            Vec3d diff = tpos.subtract(eye);
+            float angle = (float) Math.toDegrees(Math.atan2(diff.z, diff.x)) - 90.0F;
 
-            if (var12 > this.fovSetting.getValue() / 2.0F) continue;
+            float angleDelta = Math.abs(normalize(angle - camera.getYaw()));
+            if (angleDelta > fovSetting.getValue() / 2.0F) continue;
 
-            float var13 = var6.distanceTo(mc.player);
-            float var14 = var12 + var13 * 0.5F;
-            if (var14 < var2) {
-                var2 = var14;
-                var1 = var6;
+            float score = angleDelta + living.distanceTo(mc.player) * 0.5F;
+            if (score < bestScore) {
+                bestScore = score;
+                best = living;
             }
         }
 
-        return var1;
+        return best;
     }
-  }
+            }
