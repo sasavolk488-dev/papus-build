@@ -31,9 +31,9 @@ jobs:
 
       - name: Patch AimAssist
         run: |
-          cd unpacked
-          AIM=$(find . -name "AimAssist.java" -path "*player*" | head -1)
-          echo "Patching $AIM"
+          # Копируем из корня репозитория, а НЕ из unpacked
+          AIM=$(find unpacked -name "AimAssist.java" -path "*player*" | head -1)
+          echo "Patching: $AIM"
           cp patch/AimAssist.java "$AIM"
           head -20 "$AIM"
 
