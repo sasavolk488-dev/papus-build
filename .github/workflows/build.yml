@@ -18,6 +18,18 @@ jobs:
           echo "=== Что внутри ==="
           ls -la unpacked
 
+      - name: Fix gradle.properties
+        run: |
+          cd unpacked
+          GRADLE_DIR=$(find . -name "build.gradle" -not -path "*/build/*" -not -path "*/.gradle/*" | head -1 | xargs dirname)
+          echo "Найден build.gradle в: $GRADLE_DIR"
+          # Удаляем захардкоженный путь к Java
+          if [ -f "$GRADLE_DIR/gradle.properties" ]; then
+            sed -i '/org.gradle.java.home/d' "$GRADLE_DIR/gradle.properties"
+            echo "=== gradle.properties после правки ==="
+            cat "$GRADLE_DIR/gradle.properties"
+          fi
+
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -28,9 +40,7 @@ jobs:
       - name: Build
         run: |
           cd unpacked
-          # Ищем build.gradle на любом уровне
           GRADLE_DIR=$(find . -name "build.gradle" -not -path "*/build/*" -not -path "*/.gradle/*" | head -1 | xargs dirname)
-          echo "Найден build.gradle в: $GRADLE_DIR"
           cd "$GRADLE_DIR"
           gradle build --no-daemon
 
