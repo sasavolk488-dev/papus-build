@@ -13,8 +13,10 @@ jobs:
 
       - name: Unzip
         run: |
-          unzip -o srcready1.zip
-          ls -la
+          mkdir -p unpacked
+          unzip -o srcready1.zip -d unpacked
+          echo "=== Что внутри ==="
+          ls -la unpacked
 
       - uses: actions/setup-java@v4
         with:
@@ -25,10 +27,15 @@ jobs:
 
       - name: Build
         run: |
-          find . -name "build.gradle" -not -path "*/build/*" -not -path "*/.gradle/*" | head -1 | xargs dirname | xargs -I{} sh -c "cd {} && gradle build --no-daemon"
+          cd unpacked
+          # Ищем build.gradle на любом уровне
+          GRADLE_DIR=$(find . -name "build.gradle" -not -path "*/build/*" -not -path "*/.gradle/*" | head -1 | xargs dirname)
+          echo "Найден build.gradle в: $GRADLE_DIR"
+          cd "$GRADLE_DIR"
+          gradle build --no-daemon
 
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
           name: papus-jar
-          path: '**/build/libs/*.jar'
+          path: 'unpacked/**/build/libs/*.jar'
