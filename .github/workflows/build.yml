@@ -15,20 +15,27 @@ jobs:
         run: |
           mkdir -p unpacked
           unzip -o srcready1.zip -d unpacked
-          echo "=== Что внутри ==="
           ls -la unpacked
+
+      - name: Find project dir
+        id: proj
+        run: |
+          cd unpacked
+          DIR=$(find . -name "build.gradle" -not -path "*/build/*" -not -path "*/.gradle/*" | head -1 | xargs dirname)
+          echo "dir=$DIR" >> $GITHUB_OUTPUT
 
       - name: Fix gradle.properties
         run: |
+          cd unpacked/${{ steps.proj.outputs.dir }}
+          sed -i '/org.gradle.java.home/d' gradle.properties || true
+
+      - name: Patch AimAssist
+        run: |
           cd unpacked
-          GRADLE_DIR=$(find . -name "build.gradle" -not -path "*/build/*" -not -path "*/.gradle/*" | head -1 | xargs dirname)
-          echo "Найден build.gradle в: $GRADLE_DIR"
-          # Удаляем захардкоженный путь к Java
-          if [ -f "$GRADLE_DIR/gradle.properties" ]; then
-            sed -i '/org.gradle.java.home/d' "$GRADLE_DIR/gradle.properties"
-            echo "=== gradle.properties после правки ==="
-            cat "$GRADLE_DIR/gradle.properties"
-          fi
+          AIM=$(find . -name "AimAssist.java" -path "*player*" | head -1)
+          echo "Patching $AIM"
+          cp patch/AimAssist.java "$AIM"
+          head -20 "$AIM"
 
       - uses: actions/setup-java@v4
         with:
@@ -39,9 +46,7 @@ jobs:
 
       - name: Build
         run: |
-          cd unpacked
-          GRADLE_DIR=$(find . -name "build.gradle" -not -path "*/build/*" -not -path "*/.gradle/*" | head -1 | xargs dirname)
-          cd "$GRADLE_DIR"
+          cd unpacked/${{ steps.proj.outputs.dir }}
           gradle build --no-daemon
 
       - name: Upload JAR
