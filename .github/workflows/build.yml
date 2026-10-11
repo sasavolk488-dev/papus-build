@@ -1,0 +1,34 @@
+name: Build Papus
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip
+        run: |
+          unzip -o srcready1.zip
+          ls -la
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        run: |
+          find . -name "build.gradle" -not -path "*/build/*" -not -path "*/.gradle/*" | head -1 | xargs dirname | xargs -I{} sh -c "cd {} && gradle build --no-daemon"
+
+      - name: Upload JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: papus-jar
+          path: '**/build/libs/*.jar'
