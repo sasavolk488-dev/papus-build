@@ -20,61 +20,35 @@ import project.papus.implement.events.player.TickEvent;
 
 public class KillAura extends Module {
 
-    // Настройки из скриншота
     private final ValueSetting rangeSetting;
-    private final ValueSetting yawMinSetting;
-    private final ValueSetting yawMaxSetting;
-    private final ValueSetting pitchMinSetting;
-    private final ValueSetting pitchMaxSetting;
-    private final ValueSetting hitYawSetting;
-    private final ValueSetting predictionSetting;
-    private final ValueSetting offsetYawSetting;
-    private final ValueSetting oscXSetting;
-    
-    private final ValueSetting minCpsSetting;
-    private final ValueSetting maxCpsSetting;
+    private final BooleanSetting useAIRecordSetting;
     private final BooleanSetting silentRotSetting;
     private final MultiSelectSetting targetsSetting;
 
     private final Random random = new Random();
-    
     private long lastAttackTime = 0;
-    private long nextAttackDelay = 0;
     private LivingEntity currentTarget = null;
     
     private float silentYaw = 0;
     private float silentPitch = 0;
     private float lastSentYaw = Float.MAX_VALUE;
     private float lastSentPitch = Float.MAX_VALUE;
-    private int attackDelayTicks = 0;
+
+    // Индекс воспроизведения записи
+    private int playbackIndex = 0;
 
     public KillAura() {
         super("KillAura", "Автоатака", ModuleCategory.PLAYER);
 
-        // Настройки из твоего скриншота
         this.rangeSetting = new ValueSetting("Дистанция", "").setValue(3.0F).range(2.0F, 3.2F);
-        this.yawMinSetting = new ValueSetting("Yaw мин", "").setValue(35F).range(1F, 180F);
-        this.yawMaxSetting = new ValueSetting("Yaw макс", "").setValue(40F).range(1F, 180F);
-        this.pitchMinSetting = new ValueSetting("Pitch мин", "").setValue(20F).range(1F, 90F);
-        this.pitchMaxSetting = new ValueSetting("Pitch макс", "").setValue(25F).range(1F, 90F);
+        this.useAIRecordSetting = new BooleanSetting("Использовать ИИ-Запись", "").setValue(true);
+        this.silentRotSetting = new BooleanSetting("Silent Aim", "").setValue(true);
         
-        this.hitYawSetting = new ValueSetting("Удар Yaw", "").setValue(15F).range(1F, 90F);
-        this.predictionSetting = new ValueSetting("Упреждение", "").setValue(0.10F).range(0.0F, 1.0F);
-        this.offsetYawSetting = new ValueSetting("Смещ. Yaw", "").setValue(-1.0F).range(-10F, 10F);
-        this.oscXSetting = new ValueSetting("Осц. X", "").setValue(0.10F).range(0.0F, 1.0F);
-
-        this.minCpsSetting = new ValueSetting("Min CPS", "").setValue(8F).range(1F, 15F);
-        this.maxCpsSetting = new ValueSetting("Max CPS", "").setValue(12F).range(1F, 15F);
-        
-        this.silentRotSetting = new BooleanSetting("Silent Aim", "Скрыть наводку").setValue(true);
         this.targetsSetting = new MultiSelectSetting("Цели", "").value("Игроки", "Мобы");
         this.targetsSetting.getSelected().add("Игроки");
 
         this.setup(
-            this.rangeSetting, this.yawMinSetting, this.yawMaxSetting,
-            this.pitchMinSetting, this.pitchMaxSetting, this.hitYawSetting,
-            this.predictionSetting, this.offsetYawSetting, this.oscXSetting,
-            this.minCpsSetting, this.maxCpsSetting,
+            this.rangeSetting, this.useAIRecordSetting, 
             this.silentRotSetting, this.targetsSetting
         );
     }
@@ -82,6 +56,7 @@ public class KillAura extends Module {
     @Override
     public void deactivate() {
         currentTarget = null;
+        playbackIndex = 0;
         lastSentYaw = Float.MAX_VALUE;
         lastSentPitch = Float.MAX_VALUE;
         super.deactivate();
@@ -95,56 +70,41 @@ public class KillAura extends Module {
         if (currentTarget == null) {
             silentYaw = mc.player.getYaw();
             silentPitch = mc.player.getPitch();
-            lastSentYaw = Float.MAX_VALUE;
-            lastSentPitch = Float.MAX_VALUE;
-            attackDelayTicks = 0;
+            playbackIndex = 0;
             return;
         }
 
-        // 1. ПРЕДУГАДЫВАНИЕ (Prediction)
-        // Берем позицию цели + (скорость * упреждение)
-        Vec3d predictedPos = currentTarget.getPos().add(
-                currentTarget.getVelocity().multiply(predictionSetting.getValue())
-        );
+        // Если включена ИИ-запись и она не пустая
+        if (useAIRecordSetting.isValue() && !AuraRecorder.recordedYawSteps.isEmpty()) {
+            // Берем следующий шаг из нашей записи
+            if (playbackIndex >= AuraRecorder.recordedYawSteps.size()) {
+                playbackIndex = 0; // Зацикливаем
+            }
 
-        // 2. ОСЦИЛЛЯЦИЯ (Гуляние точки)
-        // Синусоида по X
-        double time = (System.currentTimeMillis() % 2000) / 1000.0;
-        double oscX = Math.sin(time * Math.PI) * oscXSetting.getValue();
-        predictedPos = predictedPos.add(oscX, 0, 0);
+            float recordedYaw = AuraRecorder.recordedYawSteps.get(playbackIndex);
+            float recordedPitch = AuraRecorder.recordedPitchSteps.get(playbackIndex);
 
-        Vec3d eye = mc.player.getPos().add(0.0, mc.player.getEyeHeight(mc.player.getPose()), 0.0);
-        // Целимся в глаза (как на скрине), а не в центр
-        Vec3d targetEyes = predictedPos.add(0.0, currentTarget.getHeight() * 0.9, 0.0); 
+            // Добавляем небольшую случайность, чтобы античит не видел идеальный цикл
+            silentYaw += recordedYaw * (0.9F + random.nextFloat() * 0.2F);
+            silentPitch += recordedPitch * (0.9F + random.nextFloat() * 0.2F);
 
-        // 3. СМЕЩЕНИЕ (Offset)
-        float targetYaw = getTargetYaw(targetEyes) + offsetYawSetting.getValue();
-        float targetPitch = getTargetPitch(eye, targetEyes);
+            playbackIndex++;
+        } else {
+            // Обычная ротация (если записи нет)
+            Vec3d eye = mc.player.getPos().add(0.0, mc.player.getHeight(), 0.0);
+            Vec3d targetPos = currentTarget.getPos().add(0.0, currentTarget.getHeight() * 0.6, 0.0);
+            float targetYaw = getTargetYaw(targetPos);
+            float targetPitch = getTargetPitch(eye, targetPos);
 
-        // 4. РАСЧЕТ СКОРОСТИ (Случайная между мин и макс)
-        float currentYawSpeed = yawMinSetting.getValue() + random.nextFloat() * (yawMaxSetting.getValue() - yawMinSetting.getValue());
-        float currentPitchSpeed = pitchMinSetting.getValue() + random.nextFloat() * (pitchMaxSetting.getValue() - pitchMinSetting.getValue());
-
-        // Если мы бьем, используем скорость Удара (Hit Yaw)
-        boolean isAttacking = System.currentTimeMillis() >= lastAttackTime + nextAttackDelay - 100;
-        if (isAttacking) {
-            currentYawSpeed = hitYawSetting.getValue(); 
+            float stepYaw = MathHelper.clamp(normalize(targetYaw - silentYaw), -25.0F, 25.0F);
+            float stepPitch = MathHelper.clamp(normalize(targetPitch - silentPitch), -15.0F, 15.0F);
+            
+            silentYaw += stepYaw;
+            silentPitch += stepPitch;
         }
 
-        float yawDiff = normalize(targetYaw - silentYaw);
-        float pitchDiff = normalize(targetPitch - silentPitch);
-
-        // Плавный шаг с учетом скорости и GCD
-        float stepYaw = MathHelper.clamp(yawDiff, -currentYawSpeed, currentYawSpeed);
-        float stepPitch = MathHelper.clamp(pitchDiff, -currentPitchSpeed, currentPitchSpeed);
-        
-        float gcd = getGCD();
-        silentYaw += Math.round(stepYaw / gcd) * gcd;
-        silentPitch += Math.round(stepPitch / gcd) * gcd;
-
         silentYaw = normalize(silentYaw);
-        // Ограничиваем Pitch (как в настройках -75 до 40)
-        silentPitch = MathHelper.clamp(silentPitch, -75.0F, 40.0F);
+        silentPitch = MathHelper.clamp(silentPitch, -89.0F, 89.0F);
 
         // Отправка пакета
         if (silentRotSetting.isValue()) {
@@ -157,35 +117,19 @@ public class KillAura extends Module {
             }
         }
 
-        // Задержка удара (PacketOrder)
-        if (attackDelayTicks < 2) {
-            attackDelayTicks++;
-            return;
-        }
+        // Проверка, наведены ли мы (FOV)
+        float targetYawReal = getTargetYaw(currentTarget.getPos());
+        if (Math.abs(normalize(targetYawReal - silentYaw)) > 30.0F) return;
 
-        // Логика удара
+        // Удар
         long now = System.currentTimeMillis();
-        if (now >= lastAttackTime + nextAttackDelay) {
+        if (now >= lastAttackTime + 100) {
             if (mc.player.distanceTo(currentTarget) <= rangeSetting.getValue()) {
                 mc.getNetworkHandler().sendPacket(PlayerInteractEntityC2SPacket.attack(currentTarget, mc.player.isSneaking()));
                 mc.player.swingHand(Hand.MAIN_HAND);
                 lastAttackTime = now;
-                calculateNextDelay();
-                attackDelayTicks = 0;
             }
         }
-    }
-
-    private float getGCD() {
-        float sens = mc.options.getMouseSensitivity().getValue().floatValue();
-        float f = sens * 0.6F + 0.2F;
-        return f * f * f * 8.0F * 0.15F;
-    }
-
-    private void calculateNextDelay() {
-        float cps = minCpsSetting.getValue() + random.nextFloat() * (maxCpsSetting.getValue() - minCpsSetting.getValue());
-        long baseDelay = (long) (1000.0F / cps);
-        this.nextAttackDelay = Math.max(50, baseDelay + (random.nextInt(60) - 25));
     }
 
     private LivingEntity findTarget() {
