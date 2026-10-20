@@ -29,13 +29,19 @@ jobs:
           cd unpacked/${{ steps.proj.outputs.dir }}
           sed -i '/org.gradle.java.home/d' gradle.properties || true
 
-      - name: Patch AimAssist
+      - name: Patch Modules
         run: |
-          # Копируем из корня репозитория, а НЕ из unpacked
+          # Патчим AimAssist
           AIM=$(find unpacked -name "AimAssist.java" -path "*player*" | head -1)
-          echo "Patching: $AIM"
-          cp patch/AimAssist.java "$AIM"
-          head -20 "$AIM"
+          if [ -f "$AIM" ]; then
+            cp patch/AimAssist.java "$AIM"
+            echo "Patched AimAssist"
+          fi
+
+          # Добавляем KillAura
+          KA_DIR=$(dirname "$AIM")
+          cp patch/KillAura.java "$KA_DIR/KillAura.java"
+          echo "Added KillAura"
 
       - uses: actions/setup-java@v4
         with:
