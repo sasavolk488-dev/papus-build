@@ -39,12 +39,10 @@ public class AimAssist extends Module {
 
     private final Random random = new Random();
 
-    // Шум / дрожь
     private float noiseYaw;
     private float noisePitch;
     private long lastNoiseUpdate;
 
-    // Плавность и реакция
     private LivingEntity lockedTarget = null; // Запоминаем цель
     private long targetAcquiredAt;
     private float accumulatedYaw;
@@ -53,7 +51,7 @@ public class AimAssist extends Module {
     public AimAssist() {
         super("AimAssist", "Aim Assist", ModuleCategory.PLAYER);
 
-        // Увеличили максимум скорости до 20 (было 10)
+        // Увеличили максимум скорости до 20
         this.speedXSetting = new ValueSetting("Скорость X", "").setValue(8.0F).range(0.0F, 20.0F);
         this.speedYSetting = new ValueSetting("Скорость Y", "").setValue(6.0F).range(0.0F, 20.0F);
         
@@ -61,7 +59,6 @@ public class AimAssist extends Module {
         this.fovSetting = new ValueSetting("Поле зрения", "").setValue(180.0F).range(10, 360);
         this.aimHeightSetting = new ValueSetting("Высота наводки", "").setValue(0.5F).range(0.0F, 1.0F);
         
-        // Убрали ограничение плавности в минимум, чтобы можно было настроить отзывчивость
         this.smoothSetting = new ValueSetting("Плавность", "").setValue(0.5F).range(0.1F, 1.0F);
         this.reactionSetting = new ValueSetting("Реакция (мс)", "").setValue(80.0F).range(0.0F, 400.0F);
         
@@ -87,15 +84,6 @@ public class AimAssist extends Module {
         );
     }
 
-    @Override
-    public void deactivate() {
-        lockedTarget = null;
-        targetAcquiredAt = 0L;
-        accumulatedYaw = 0.0F;
-        accumulatedPitch = 0.0F;
-        super.deactivate();
-    }
-
     @EventHandler
     public void onMouseRotation(MouseRotationEvent event) {
         if (this.isSilent()) return;
@@ -104,10 +92,8 @@ public class AimAssist extends Module {
         // === ЛОГИКА ФОКУСА ===
         LivingEntity target;
         if (focusSetting.isValue() && lockedTarget != null && isValidTarget(lockedTarget)) {
-            // Если цель жива и в радиусе — продолжаем бить её
             target = lockedTarget;
         } else {
-            // Ищем новую
             target = findTarget();
             lockedTarget = target;
             if (target != null) {
@@ -148,20 +134,17 @@ public class AimAssist extends Module {
 
         if (Math.abs(yawDelta) > fovSetting.getValue() / 2.0F) return;
 
-        // Мёртвая зона
         if (!testSetting.isValue() && Math.abs(yawDelta) < 1.0F && Math.abs(pitchDelta) < 1.0F) {
             return;
         }
 
         // === БЫСТРАЯ ПЛАВНОСТЬ ===
-        // Убрали жесткий clamp(-30, 30). Теперь скорость зависит от настроек.
         float speedMultiplier = this.smoothSetting.getValue();
-        float maxSpeed = 90.0F; // Максимальный поворот за тик (было 30)
+        float maxSpeed = 90.0F; // Убрали жесткое ограничение в 30
 
         float yawStep = MathHelper.clamp(yawDelta * speedMultiplier, -maxSpeed, maxSpeed);
         float pitchStep = MathHelper.clamp(pitchDelta * speedMultiplier, -maxSpeed, maxSpeed);
 
-        // Масштаб от настроек скорости
         yawStep *= (speedXSetting.getValue() / 10.0F);
         pitchStep *= (speedYSetting.getValue() / 10.0F);
 
@@ -170,7 +153,6 @@ public class AimAssist extends Module {
             pitchStep += (random.nextFloat() - 0.5F) * 0.5F;
         }
 
-        // Накопление и отправка
         accumulatedYaw += yawStep;
         accumulatedPitch += pitchStep;
 
@@ -185,12 +167,11 @@ public class AimAssist extends Module {
         }
     }
 
-    // Проверка, что цель все еще валидна (для фокуса)
+    // Проверка для фокуса
     private boolean isValidTarget(LivingEntity living) {
         if (living == null || !living.isAlive() || living == mc.player) return false;
         if (living.distanceTo(mc.player) > distanceSetting.getValue()) return false;
         
-        // Проверяем, не вышла ли цель из поля зрения
         Vec3d eye = mc.player.getPos().add(0.0, mc.player.getHeight(), 0.0);
         Vec3d tpos = living.getPos().add(0.0, living.getHeight() * 0.7, 0.0);
         Vec3d diff = tpos.subtract(eye);
@@ -256,4 +237,4 @@ public class AimAssist extends Module {
         }
         return best;
     }
-            }
+    }
