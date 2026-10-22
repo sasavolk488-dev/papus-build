@@ -32,7 +32,7 @@ public class AimAssist extends Module {
     private final ValueSetting smoothSetting;
     private final ValueSetting reactionSetting;
     
-    private final BooleanSetting focusSetting;     // НОВОЕ (Фокус на одном)
+    private final BooleanSetting focusSetting;     
     private final BooleanSetting humanizeSetting;
     private final BooleanSetting testSetting;
     private final MultiSelectSetting targetsSetting;
@@ -43,7 +43,7 @@ public class AimAssist extends Module {
     private float noisePitch;
     private long lastNoiseUpdate;
 
-    private LivingEntity lockedTarget = null; // Запоминаем цель
+    private LivingEntity lockedTarget = null; 
     private long targetAcquiredAt;
     private float accumulatedYaw;
     private float accumulatedPitch;
@@ -51,7 +51,7 @@ public class AimAssist extends Module {
     public AimAssist() {
         super("AimAssist", "Aim Assist", ModuleCategory.PLAYER);
 
-        // Увеличили максимум скорости до 20
+        // МАКСИМАЛЬНАЯ СКОРОСТЬ УВЕЛИЧЕНА ДО 20
         this.speedXSetting = new ValueSetting("Скорость X", "").setValue(8.0F).range(0.0F, 20.0F);
         this.speedYSetting = new ValueSetting("Скорость Y", "").setValue(6.0F).range(0.0F, 20.0F);
         
@@ -62,6 +62,7 @@ public class AimAssist extends Module {
         this.smoothSetting = new ValueSetting("Плавность", "").setValue(0.5F).range(0.1F, 1.0F);
         this.reactionSetting = new ValueSetting("Реакция (мс)", "").setValue(80.0F).range(0.0F, 400.0F);
         
+        // ГАЛОЧКА ФОКУСА
         this.focusSetting = new BooleanSetting("Фокус на одном", "Держит одну цель").setValue(true);
         this.humanizeSetting = new BooleanSetting("Humanize", "").setValue(true);
         this.testSetting = new BooleanSetting("Test", "").setValue(false);
@@ -70,17 +71,10 @@ public class AimAssist extends Module {
         this.targetsSetting.getSelected().add("Игроки");
 
         this.setup(
-            this.speedXSetting,
-            this.speedYSetting,
-            this.distanceSetting,
-            this.fovSetting,
-            this.aimHeightSetting,
-            this.smoothSetting,
-            this.reactionSetting,
-            this.focusSetting,
-            this.humanizeSetting,
-            this.testSetting,
-            this.targetsSetting
+            this.speedXSetting, this.speedYSetting, this.distanceSetting,
+            this.fovSetting, this.aimHeightSetting, this.smoothSetting,
+            this.reactionSetting, this.focusSetting, this.humanizeSetting,
+            this.testSetting, this.targetsSetting
         );
     }
 
@@ -89,7 +83,6 @@ public class AimAssist extends Module {
         if (this.isSilent()) return;
         if (mc.player == null || mc.world == null) return;
 
-        // === ЛОГИКА ФОКУСА ===
         LivingEntity target;
         if (focusSetting.isValue() && lockedTarget != null && isValidTarget(lockedTarget)) {
             target = lockedTarget;
@@ -106,7 +99,6 @@ public class AimAssist extends Module {
             return;
         }
 
-        // Задержка реакции
         long reactionDelay = (long) reactionSetting.getValue();
         if (humanizeSetting.isValue()) reactionDelay += random.nextInt(60) - 30;
         if (reactionDelay > 0 && System.currentTimeMillis() - targetAcquiredAt < reactionDelay) {
@@ -138,9 +130,9 @@ public class AimAssist extends Module {
             return;
         }
 
-        // === БЫСТРАЯ ПЛАВНОСТЬ ===
+        // БЫСТРЫЙ ПОВОРОТ
         float speedMultiplier = this.smoothSetting.getValue();
-        float maxSpeed = 90.0F; // Убрали жесткое ограничение в 30
+        float maxSpeed = 90.0F; 
 
         float yawStep = MathHelper.clamp(yawDelta * speedMultiplier, -maxSpeed, maxSpeed);
         float pitchStep = MathHelper.clamp(pitchDelta * speedMultiplier, -maxSpeed, maxSpeed);
@@ -167,7 +159,6 @@ public class AimAssist extends Module {
         }
     }
 
-    // Проверка для фокуса
     private boolean isValidTarget(LivingEntity living) {
         if (living == null || !living.isAlive() || living == mc.player) return false;
         if (living.distanceTo(mc.player) > distanceSetting.getValue()) return false;
@@ -237,4 +228,4 @@ public class AimAssist extends Module {
         }
         return best;
     }
-    }
+}
