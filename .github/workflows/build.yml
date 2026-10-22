@@ -29,26 +29,27 @@ jobs:
           cd unpacked/${{ steps.proj.outputs.dir }}
           sed -i '/org.gradle.java.home/d' gradle.properties || true
 
-      - name: Patch AimAssist & KillAura
+      - name: Patch AimAssist & Add LegitRotation
         run: |
-          # Патчим AimAssist
           AIM=$(find unpacked -name "AimAssist.java" -path "*player*" | head -1)
+          KA_DIR=$(dirname "$AIM")
+          
           if [ -f "$AIM" ]; then
             cp patch/AimAssist.java "$AIM"
           fi
-
-          # Добавляем файл KillAura и AuraRecorder
-          KA_DIR=$(dirname "$AIM")
+          
+          cp patch/LegitRotation.java "$KA_DIR/LegitRotation.java"
           cp patch/KillAura.java "$KA_DIR/KillAura.java"
           cp patch/AuraRecorder.java "$KA_DIR/AuraRecorder.java"
 
-      - name: Register KillAura in ModuleRepository
+      - name: Register Modules
         run: |
           REPO=$(find unpacked -name "ModuleRepository.java" | head -1)
-          # Добавляем импорты (если их еще нет)
-          grep -q "import project.papus.implement.features.modules.player.KillAura;" "$REPO" || sed -i '/import project.papus.implement.features.modules.player.AimAssist;/a import project.papus.implement.features.modules.player.KillAura;\nimport project.papus.implement.features.modules.player.AuraRecorder;' "$REPO"
-          # Добавляем в список
-          grep -q "new KillAura()" "$REPO" || sed -i '/new AimAssist()/a \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new KillAura(),\n\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new AuraRecorder(),' "$REPO"
+          # Импорты
+          grep -q "import project.papus.implement.features.modules.player.LegitRotation;" "$REPO" || sed -i '/import project.papus.implement.features.modules.player.AimAssist;/a import project.papus.implement.features.modules.player.LegitRotation;\nimport project.papus.implement.features.modules.player.KillAura;\nimport project.papus.implement.features.modules.player.AuraRecorder;' "$REPO"
+          
+          # Добавление в список
+          grep -q "new LegitRotation()" "$REPO" || sed -i '/new AimAssist()/a \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new LegitRotation(),\n\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new KillAura(),\n\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new AuraRecorder(),' "$REPO"
 
       - uses: actions/setup-java@v4
         with:
