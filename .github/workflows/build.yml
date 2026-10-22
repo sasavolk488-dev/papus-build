@@ -37,26 +37,18 @@ jobs:
             cp patch/AimAssist.java "$AIM"
           fi
 
-          # Добавляем файл KillAura
+          # Добавляем файл KillAura и AuraRecorder
           KA_DIR=$(dirname "$AIM")
           cp patch/KillAura.java "$KA_DIR/KillAura.java"
+          cp patch/AuraRecorder.java "$KA_DIR/AuraRecorder.java"
 
       - name: Register KillAura in ModuleRepository
         run: |
-          # Ищем файл репозитория модулей
           REPO=$(find unpacked -name "ModuleRepository.java" | head -1)
-          echo "Patching repository: $REPO"
-
-          # 1. Добавляем импорт KillAura
-          sed -i '/import project.papus.implement.features.modules.player.AimAssist;/a import project.papus.implement.features.modules.player.KillAura;' "$REPO"
-
-          # 2. Добавляем new KillAura() в список (ищем new AimAssist и добавляем после него)
-          # Учитываем, что там может быть запятая или точка с запятой
-          sed -i '/new AimAssist()/a \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new KillAura(),' "$REPO"
-
-          # Выводим кусок файла, чтобы проверить, что всё вставилось
-          echo "=== Проверка вставки ==="
-          grep -A 2 -B 2 "KillAura" "$REPO"
+          # Добавляем импорты (если их еще нет)
+          grep -q "import project.papus.implement.features.modules.player.KillAura;" "$REPO" || sed -i '/import project.papus.implement.features.modules.player.AimAssist;/a import project.papus.implement.features.modules.player.KillAura;\nimport project.papus.implement.features.modules.player.AuraRecorder;' "$REPO"
+          # Добавляем в список
+          grep -q "new KillAura()" "$REPO" || sed -i '/new AimAssist()/a \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new KillAura(),\n\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new AuraRecorder(),' "$REPO"
 
       - uses: actions/setup-java@v4
         with:
