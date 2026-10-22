@@ -32,7 +32,10 @@ public class AimAssist extends Module {
     private final ValueSetting smoothSetting;
     private final ValueSetting reactionSetting;
     
-    private final BooleanSetting focusSetting;     
+    private final BooleanSetting focusSetting;
+    private final BooleanSetting multiPointsSetting; // НОВОЕ (Мульти-точки)
+    private final ValueSetting pointChangeIntervalSetting; // Интервал смены точки
+    
     private final BooleanSetting humanizeSetting;
     private final BooleanSetting testSetting;
     private final MultiSelectSetting targetsSetting;
@@ -43,27 +46,36 @@ public class AimAssist extends Module {
     private float noisePitch;
     private long lastNoiseUpdate;
 
-    private LivingEntity lockedTarget = null; 
+    private LivingEntity lockedTarget = null;
     private long targetAcquiredAt;
     private float accumulatedYaw;
     private float accumulatedPitch;
 
+    // Переменные для Мульти-точек
+    private long lastPointChange = 0;
+    private float currentHeightMul = 0.5F;
+
     public AimAssist() {
         super("AimAssist", "Aim Assist", ModuleCategory.PLAYER);
 
-        // МАКСИМАЛЬНАЯ СКОРОСТЬ УВЕЛИЧЕНА ДО 20
         this.speedXSetting = new ValueSetting("Скорость X", "").setValue(8.0F).range(0.0F, 20.0F);
         this.speedYSetting = new ValueSetting("Скорость Y", "").setValue(6.0F).range(0.0F, 20.0F);
         
         this.distanceSetting = new ValueSetting("Дистанция", "").setValue(4.0F).range(2, 8);
         this.fovSetting = new ValueSetting("Поле зрения", "").setValue(180.0F).range(10, 360);
+        
+        // Базовая высота (если мульти-точки выключены)
         this.aimHeightSetting = new ValueSetting("Высота наводки", "").setValue(0.5F).range(0.0F, 1.0F);
         
         this.smoothSetting = new ValueSetting("Плавность", "").setValue(0.5F).range(0.1F, 1.0F);
         this.reactionSetting = new ValueSetting("Реакция (мс)", "").setValue(80.0F).range(0.0F, 400.0F);
         
-        // ГАЛОЧКА ФОКУСА
         this.focusSetting = new BooleanSetting("Фокус на одном", "Держит одну цель").setValue(true);
+        
+        // НОВОЕ
+        this.multiPointsSetting = new BooleanSetting("Мульти-точки", "Бьет в разные части тела").setValue(true);
+        this.pointChangeIntervalSetting = new ValueSetting("Смена точки (мс)", "").setValue(400F).range(100F, 2000F);
+        
         this.humanizeSetting = new BooleanSetting("Humanize", "").setValue(true);
         this.testSetting = new BooleanSetting("Test", "").setValue(false);
         
@@ -71,10 +83,19 @@ public class AimAssist extends Module {
         this.targetsSetting.getSelected().add("Игроки");
 
         this.setup(
-            this.speedXSetting, this.speedYSetting, this.distanceSetting,
-            this.fovSetting, this.aimHeightSetting, this.smoothSetting,
-            this.reactionSetting, this.focusSetting, this.humanizeSetting,
-            this.testSetting, this.targetsSetting
+            this.speedXSetting,
+            this.speedYSetting,
+            this.distanceSetting,
+            this.fovSetting,
+            this.aimHeightSetting,
+            this.smoothSetting,
+            this.reactionSetting,
+            this.focusSetting,
+            this.multiPointsSetting,
+            this.pointChangeIntervalSetting,
+            this.humanizeSetting,
+            this.testSetting,
+            this.targetsSetting
         );
     }
 
@@ -107,12 +128,26 @@ public class AimAssist extends Module {
 
         this.updateNoise();
 
+        // === ЛОГИКА МУЛЬТИ-ТОЧЕК ===
+        float heightMul = this.aimHeightSetting.getValue();
+        if (multiPointsSetting.isValue()) {
+            long now = System.currentTimeMillis();
+            // Если прошло время интервала, меняем точку
+            if (now - lastPointChange > pointChangeIntervalSetting.getValue()) {
+                // Случайно выбираем точку: ноги (0.2), пояс (0.4), грудь (0.6), голова (0.8)
+                float[] points = {0.2F, 0.4F, 0.6F, 0.8F, 0.9F};
+                currentHeightMul = points[random.nextInt(points.length)];
+                lastPointChange = now;
+            }
+            heightMul = currentHeightMul;
+        }
+
         Vec3d eye = mc.player.getPos().add(0.0, mc.player.getHeight(), 0.0);
-        float heightMul = this.aimHeightSetting.getValue() + (humanizeSetting.isValue() ? noisePitch : 0.0F);
+        float finalHeight = heightMul + (humanizeSetting.isValue() ? noisePitch : 0.0F);
         
         Vec3d aimPos = target.getPos().add(
             humanizeSetting.isValue() ? noiseYaw : 0.0,
-            target.getHeight() * heightMul,
+            target.getHeight() * finalHeight,
             humanizeSetting.isValue() ? noiseYaw * 0.5F : 0.0
         );
 
@@ -130,9 +165,8 @@ public class AimAssist extends Module {
             return;
         }
 
-        // БЫСТРЫЙ ПОВОРОТ
         float speedMultiplier = this.smoothSetting.getValue();
-        float maxSpeed = 90.0F; 
+        float maxSpeed = 90.0F;
 
         float yawStep = MathHelper.clamp(yawDelta * speedMultiplier, -maxSpeed, maxSpeed);
         float pitchStep = MathHelper.clamp(pitchDelta * speedMultiplier, -maxSpeed, maxSpeed);
@@ -228,4 +262,4 @@ public class AimAssist extends Module {
         }
         return best;
     }
-}
+                                                                                }
