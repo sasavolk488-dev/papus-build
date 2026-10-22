@@ -31,19 +31,21 @@ public class AimAssist extends Module {
     private final ValueSetting aimHeightSetting;
     private final ValueSetting smoothSetting;
     private final ValueSetting reactionSetting;
+    
+    private final BooleanSetting focusSetting;     // НОВОЕ (Фокус на одном)
     private final BooleanSetting humanizeSetting;
     private final BooleanSetting testSetting;
     private final MultiSelectSetting targetsSetting;
 
     private final Random random = new Random();
 
-    // шум / дрожь
+    // Шум / дрожь
     private float noiseYaw;
     private float noisePitch;
     private long lastNoiseUpdate;
 
-    // плавность — интерполяция и реакция
-    private LivingEntity lastTarget;
+    // Плавность и реакция
+    private LivingEntity lockedTarget = null; // Запоминаем цель
     private long targetAcquiredAt;
     private float accumulatedYaw;
     private float accumulatedPitch;
@@ -51,16 +53,24 @@ public class AimAssist extends Module {
     public AimAssist() {
         super("AimAssist", "Aim Assist", ModuleCategory.PLAYER);
 
-        this.speedXSetting = new ValueSetting("Скорость X", "").setValue(3.5F).range(0.0F, 10.0F);
-        this.speedYSetting = new ValueSetting("Скорость Y", "").setValue(3.5F).range(0.0F, 10.0F);
-        this.distanceSetting = new ValueSetting("Дистанция", "").setValue(3.0F).range(2, 8);
+        // Увеличили максимум скорости до 20 (было 10)
+        this.speedXSetting = new ValueSetting("Скорость X", "").setValue(8.0F).range(0.0F, 20.0F);
+        this.speedYSetting = new ValueSetting("Скорость Y", "").setValue(6.0F).range(0.0F, 20.0F);
+        
+        this.distanceSetting = new ValueSetting("Дистанция", "").setValue(4.0F).range(2, 8);
         this.fovSetting = new ValueSetting("Поле зрения", "").setValue(180.0F).range(10, 360);
         this.aimHeightSetting = new ValueSetting("Высота наводки", "").setValue(0.5F).range(0.0F, 1.0F);
-        this.smoothSetting = new ValueSetting("Плавность", "").setValue(0.35F).range(0.05F, 1.0F);
-        this.reactionSetting = new ValueSetting("Реакция (мс)", "").setValue(120.0F).range(0.0F, 400.0F);
+        
+        // Убрали ограничение плавности в минимум, чтобы можно было настроить отзывчивость
+        this.smoothSetting = new ValueSetting("Плавность", "").setValue(0.5F).range(0.1F, 1.0F);
+        this.reactionSetting = new ValueSetting("Реакция (мс)", "").setValue(80.0F).range(0.0F, 400.0F);
+        
+        this.focusSetting = new BooleanSetting("Фокус на одном", "Держит одну цель").setValue(true);
         this.humanizeSetting = new BooleanSetting("Humanize", "").setValue(true);
         this.testSetting = new BooleanSetting("Test", "").setValue(false);
+        
         this.targetsSetting = new MultiSelectSetting("Таргеты", "").value("Игроки", "Мобы", "Друзья");
+        this.targetsSetting.getSelected().add("Игроки");
 
         this.setup(
             this.speedXSetting,
@@ -70,17 +80,16 @@ public class AimAssist extends Module {
             this.aimHeightSetting,
             this.smoothSetting,
             this.reactionSetting,
+            this.focusSetting,
             this.humanizeSetting,
             this.testSetting,
             this.targetsSetting
         );
-
-        this.targetsSetting.getSelected().add("Игроки");
     }
 
     @Override
     public void deactivate() {
-        lastTarget = null;
+        lockedTarget = null;
         targetAcquiredAt = 0L;
         accumulatedYaw = 0.0F;
         accumulatedPitch = 0.0F;
@@ -92,26 +101,28 @@ public class AimAssist extends Module {
         if (this.isSilent()) return;
         if (mc.player == null || mc.world == null) return;
 
-        LivingEntity target = this.findTarget();
+        // === ЛОГИКА ФОКУСА ===
+        LivingEntity target;
+        if (focusSetting.isValue() && lockedTarget != null && isValidTarget(lockedTarget)) {
+            // Если цель жива и в радиусе — продолжаем бить её
+            target = lockedTarget;
+        } else {
+            // Ищем новую
+            target = findTarget();
+            lockedTarget = target;
+            if (target != null) {
+                targetAcquiredAt = System.currentTimeMillis();
+            }
+        }
 
-        // сброс при потере цели
         if (target == null) {
-            lastTarget = null;
             targetAcquiredAt = 0L;
             return;
         }
 
-        // новая цель — фиксируем время захвата (для реакции)
-        if (target != lastTarget) {
-            lastTarget = target;
-            targetAcquiredAt = System.currentTimeMillis();
-        }
-
-        // === РЕАКЦИЯ ===
+        // Задержка реакции
         long reactionDelay = (long) reactionSetting.getValue();
-        if (humanizeSetting.isValue()) {
-            reactionDelay += random.nextInt(60) - 30; // ±30мс разброс
-        }
+        if (humanizeSetting.isValue()) reactionDelay += random.nextInt(60) - 30;
         if (reactionDelay > 0 && System.currentTimeMillis() - targetAcquiredAt < reactionDelay) {
             return;
         }
@@ -119,11 +130,8 @@ public class AimAssist extends Module {
         this.updateNoise();
 
         Vec3d eye = mc.player.getPos().add(0.0, mc.player.getHeight(), 0.0);
-
-        float heightMul = this.aimHeightSetting.getValue()
-                + (humanizeSetting.isValue() ? noisePitch : 0.0F);
-
-        // прицел слегка наводится на разные части (немного смещаем точку)
+        float heightMul = this.aimHeightSetting.getValue() + (humanizeSetting.isValue() ? noisePitch : 0.0F);
+        
         Vec3d aimPos = target.getPos().add(
             humanizeSetting.isValue() ? noiseYaw : 0.0,
             target.getHeight() * heightMul,
@@ -131,46 +139,38 @@ public class AimAssist extends Module {
         );
 
         Vec3d diff = aimPos.subtract(eye);
-
         float targetYaw = (float) Math.toDegrees(Math.atan2(diff.z, diff.x)) - 90.0F;
-        float targetPitch = (float) -Math.toDegrees(Math.atan2(
-                diff.y, Math.sqrt(diff.x * diff.x + diff.z * diff.z)));
+        float targetPitch = (float) -Math.toDegrees(Math.atan2(diff.y, Math.sqrt(diff.x * diff.x + diff.z * diff.z)));
 
         Angle cam = AngleUtil.cameraAngle();
-
         float yawDelta = normalize(targetYaw - cam.getYaw());
         float pitchDelta = normalize(targetPitch - cam.getPitch());
 
         if (Math.abs(yawDelta) > fovSetting.getValue() / 2.0F) return;
 
-        // мёртвая зона — если уже наведено, не дёргаем
-        if (!testSetting.isValue()
-                && Math.abs(yawDelta) < 1.5F
-                && Math.abs(pitchDelta) < 1.5F) {
+        // Мёртвая зона
+        if (!testSetting.isValue() && Math.abs(yawDelta) < 1.0F && Math.abs(pitchDelta) < 1.0F) {
             return;
         }
 
-        // === ПЛАВНОЕ ДВИЖЕНИЕ ===
-        // ease-in-out: ближе к цели — медленнее, дальше — быстрее
-        float smooth = smoothSetting.getValue();
+        // === БЫСТРАЯ ПЛАВНОСТЬ ===
+        // Убрали жесткий clamp(-30, 30). Теперь скорость зависит от настроек.
+        float speedMultiplier = this.smoothSetting.getValue();
+        float maxSpeed = 90.0F; // Максимальный поворот за тик (было 30)
 
-        float yawStep = easeStep(yawDelta, smooth);
-        float pitchStep = easeStep(pitchDelta, smooth);
+        float yawStep = MathHelper.clamp(yawDelta * speedMultiplier, -maxSpeed, maxSpeed);
+        float pitchStep = MathHelper.clamp(pitchDelta * speedMultiplier, -maxSpeed, maxSpeed);
 
-        // масштаб скорости от настроек
-        float sx = speedXSetting.getValue() / 40.0F;
-        float sy = speedYSetting.getValue() / 40.0F;
+        // Масштаб от настроек скорости
+        yawStep *= (speedXSetting.getValue() / 10.0F);
+        pitchStep *= (speedYSetting.getValue() / 10.0F);
 
-        yawStep *= sx;
-        pitchStep *= sy;
-
-        // === ДЖИТТЕР ===
         if (humanizeSetting.isValue()) {
-            yawStep += (random.nextFloat() - 0.5F) * 0.4F;
-            pitchStep += (random.nextFloat() - 0.5F) * 0.25F;
+            yawStep += (random.nextFloat() - 0.5F) * 0.5F;
+            pitchStep += (random.nextFloat() - 0.5F) * 0.5F;
         }
 
-        // === НАКОПЛЕНИЕ и ОТПРАВКА ===
+        // Накопление и отправка
         accumulatedYaw += yawStep;
         accumulatedPitch += pitchStep;
 
@@ -180,37 +180,24 @@ public class AimAssist extends Module {
         if (sendX != 0 || sendY != 0) {
             event.setCursorDeltaX(event.getCursorDeltaX() + (float) sendX);
             event.setCursorDeltaY(event.getCursorDeltaY() + (float) sendY);
-
             accumulatedYaw -= sendX;
             accumulatedPitch -= sendY;
         }
     }
 
-    /**
-     * Ease-in-out движение: чем меньше разница, тем медленнее подходим.
-     * Имитирует человеческое движение мышью.
-     */
-    private float easeStep(float delta, float smooth) {
-        float abs = Math.abs(delta);
-
-        // нелинейная скорость
-        float factor;
-        if (abs > 30.0F) {
-            factor = 1.0F;          // далеко — быстро
-        } else if (abs > 10.0F) {
-            factor = 0.75F;         // средне
-        } else if (abs > 3.0F) {
-            factor = 0.5F;          // близко — точнее
-        } else {
-            factor = 0.3F;          // почти наведено — медленно
-        }
-
-        // ускорение ближе к концу (эффект доводки)
-        float eased = delta * factor * smooth;
-
-        // ограничение, чтобы не рывками
-        float max = 30.0F;
-        return MathHelper.clamp(eased, -max, max);
+    // Проверка, что цель все еще валидна (для фокуса)
+    private boolean isValidTarget(LivingEntity living) {
+        if (living == null || !living.isAlive() || living == mc.player) return false;
+        if (living.distanceTo(mc.player) > distanceSetting.getValue()) return false;
+        
+        // Проверяем, не вышла ли цель из поля зрения
+        Vec3d eye = mc.player.getPos().add(0.0, mc.player.getHeight(), 0.0);
+        Vec3d tpos = living.getPos().add(0.0, living.getHeight() * 0.7, 0.0);
+        Vec3d diff = tpos.subtract(eye);
+        float angle = (float) Math.toDegrees(Math.atan2(diff.z, diff.x)) - 90.0F;
+        float angleDelta = Math.abs(normalize(angle - AngleUtil.cameraAngle().getYaw()));
+        
+        return angleDelta <= fovSetting.getValue() / 2.0F;
     }
 
     private void updateNoise() {
@@ -236,9 +223,7 @@ public class AimAssist extends Module {
 
         for (Entity entity : mc.world.getEntities()) {
             if (!(entity instanceof LivingEntity living)) continue;
-            if (living == mc.player) continue;
-            if (!living.isAlive()) continue;
-            if (living instanceof ArmorStandEntity) continue;
+            if (living == mc.player || !living.isAlive() || living instanceof ArmorStandEntity) continue;
             if (living.distanceTo(mc.player) > distanceSetting.getValue()) continue;
 
             if (living instanceof PlayerEntity player) {
@@ -259,8 +244,8 @@ public class AimAssist extends Module {
 
             Vec3d diff = tpos.subtract(eye);
             float angle = (float) Math.toDegrees(Math.atan2(diff.z, diff.x)) - 90.0F;
-
             float angleDelta = Math.abs(normalize(angle - camera.getYaw()));
+
             if (angleDelta > fovSetting.getValue() / 2.0F) continue;
 
             float score = angleDelta + living.distanceTo(mc.player) * 0.5F;
@@ -269,7 +254,6 @@ public class AimAssist extends Module {
                 best = living;
             }
         }
-
         return best;
     }
             }
