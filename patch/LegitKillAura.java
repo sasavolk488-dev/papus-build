@@ -38,6 +38,7 @@ public class LegitKillAura extends Module {
     private final BooleanSetting sprintResetSetting; 
     private final BooleanSetting critOnlySetting;    
     private final BooleanSetting smartCritsSetting;  
+    private final BooleanSetting use19Setting; // НОВОЕ: Атака 1.9
     
     private final MultiSelectSetting targetsSetting;
 
@@ -61,12 +62,13 @@ public class LegitKillAura extends Module {
         this.smoothSetting = new ValueSetting("Плавность", "").setValue(0.6F).range(0.1F, 1.0F);
         
         this.weaponOnlySetting = new BooleanSetting("Только с оружием", "").setValue(true);
-        this.sprintResetSetting = new BooleanSetting("Сброс спринта", "Сбрасывает спринт перед ударом").setValue(true);
+        this.sprintResetSetting = new BooleanSetting("Сброс спринта", "").setValue(true);
         
-        // Только криты (ждет пока ты упадешь)
         this.critOnlySetting = new BooleanSetting("Только криты", "Бьет только при падении").setValue(false);
-        // Умные криты (бьет и так, и так)
         this.smartCritsSetting = new BooleanSetting("Умные криты", "Бьет и критами, и обычными").setValue(true);
+        
+        // НОВОЕ: Режим 1.9
+        this.use19Setting = new BooleanSetting("Атака 1.9", "Ждет кулдаун удара").setValue(true);
 
         this.targetsSetting = new MultiSelectSetting("Цели", "").value("Игроки", "Мобы");
         this.targetsSetting.getSelected().add("Игроки");
@@ -74,7 +76,8 @@ public class LegitKillAura extends Module {
         this.setup(
             this.rangeSetting, this.fovSetting, this.speedXSetting, this.speedYSetting,
             this.aimHeightSetting, this.smoothSetting, this.weaponOnlySetting,
-            this.sprintResetSetting, this.critOnlySetting, this.smartCritsSetting, this.targetsSetting
+            this.sprintResetSetting, this.critOnlySetting, this.smartCritsSetting, 
+            this.use19Setting, this.targetsSetting
         );
     }
 
@@ -94,29 +97,42 @@ public class LegitKillAura extends Module {
             return;
         }
 
-        // Только криты: ждем, пока не начнем падать
         if (critOnlySetting.isValue() && !canCrit()) return;
 
-        // Умные криты (Smart Crits): если включены, бьет всегда. 
-        // Если ты в воздухе — это будет крит, если на земле — обычный удар.
-        // (Никаких авто-прыжков, как ты и просил)
-
         long now = System.currentTimeMillis();
-        if (now >= lastAttackTime + nextAttackDelay) {
+        
+        // === ЛОГИКА АТАКИ ===
+        if (use19Setting.isValue()) {
+            // 1.9 режим: проверяем шкалу перезарядки
+            float cooldown = mc.player.getAttackCooldownProgress(0.5F);
             
-            boolean wasSprinting = mc.player.isSprinting();
-            if (sprintResetSetting.isValue() && wasSprinting) {
-                mc.player.setSprinting(false);
-            }
-
-            attack(currentTarget);
+            // Ждем заполнения шкалы (0.95 = 95% для надежности)
+            // Grim ловит удары, если шкала заполнена меньше чем на 90%
+            if (cooldown < 0.95F) return;
             
-            if (sprintResetSetting.isValue() && wasSprinting) {
-                mc.player.setSprinting(true);
-            }
+            // Небольшая пауза, чтобы пакеты не улетали в один тик
+            if (now - lastAttackTime < 50) return; 
+        } else {
+            // 1.8 режим: рандомная задержка (как раньше)
+            if (now < lastAttackTime + nextAttackDelay) return;
+        }
 
-            lastAttackTime = now;
-            calculateHumanDelay();
+        // Нанесение удара
+        boolean wasSprinting = mc.player.isSprinting();
+        if (sprintResetSetting.isValue() && wasSprinting) {
+            mc.player.setSprinting(false);
+        }
+
+        attack(currentTarget);
+        
+        if (sprintResetSetting.isValue() && wasSprinting) {
+            mc.player.setSprinting(true);
+        }
+
+        lastAttackTime = now;
+        
+        if (!use19Setting.isValue()) {
+            calculateHumanDelay(); // Обновляем задержку только для 1.8
         }
     }
 
@@ -167,7 +183,6 @@ public class LegitKillAura extends Module {
         yawStep *= (speedXSetting.getValue() / 10.0F);
         pitchStep *= (speedYSetting.getValue() / 10.0F);
 
-        // Максимальная скорость до 100
         yawStep = MathHelper.clamp(yawStep, -100.0F, 100.0F);
         pitchStep = MathHelper.clamp(pitchStep, -100.0F, 100.0F);
 
@@ -183,11 +198,7 @@ public class LegitKillAura extends Module {
     private void calculateHumanDelay() {
         long delay = 110;
         delay += random.nextInt(40) - 20; 
-        
-        if (random.nextInt(100) < 10) {
-            delay += 80 + random.nextInt(70);
-        }
-        
+        if (random.nextInt(100) < 10) delay += 80 + random.nextInt(70);
         this.nextAttackDelay = Math.max(70, Math.min(200, delay));
     }
 
