@@ -9,7 +9,6 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.MaceItem;
 import net.minecraft.item.SwordItem;
-import net.minecraft.network.packet.c2s.play.PlayerInteractEntityC2SPacket;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.math.MathHelper;
@@ -38,7 +37,7 @@ public class LegitKillAura extends Module {
     private final BooleanSetting sprintResetSetting; 
     private final BooleanSetting critOnlySetting;    
     private final BooleanSetting smartCritsSetting;  
-    private final BooleanSetting use19Setting; // НОВОЕ: Атака 1.9
+    private final BooleanSetting use19Setting;
     
     private final MultiSelectSetting targetsSetting;
 
@@ -53,7 +52,8 @@ public class LegitKillAura extends Module {
     public LegitKillAura() {
         super("LegitKillAura", "Плавная аура + Триггер", ModuleCategory.PLAYER);
 
-        this.rangeSetting = new ValueSetting("Дистанция", "").setValue(3.0F).range(1.0F, 3.0F);
+        // Максимальная дистанция 2.95, чтобы Grim не ловил на 3.01
+        this.rangeSetting = new ValueSetting("Дистанция", "").setValue(2.95F).range(1.0F, 3.0F);
         this.fovSetting = new ValueSetting("FOV", "").setValue(360F).range(10F, 360F);
         
         this.speedXSetting = new ValueSetting("Скорость X", "").setValue(8.0F).range(0.0F, 20.0F);
@@ -63,11 +63,8 @@ public class LegitKillAura extends Module {
         
         this.weaponOnlySetting = new BooleanSetting("Только с оружием", "").setValue(true);
         this.sprintResetSetting = new BooleanSetting("Сброс спринта", "").setValue(true);
-        
         this.critOnlySetting = new BooleanSetting("Только криты", "Бьет только при падении").setValue(false);
         this.smartCritsSetting = new BooleanSetting("Умные криты", "Бьет и критами, и обычными").setValue(true);
-        
-        // НОВОЕ: Режим 1.9
         this.use19Setting = new BooleanSetting("Атака 1.9", "Ждет кулдаун удара").setValue(true);
 
         this.targetsSetting = new MultiSelectSetting("Цели", "").value("Игроки", "Мобы");
@@ -89,6 +86,7 @@ public class LegitKillAura extends Module {
         currentTarget = findTarget();
         if (currentTarget == null) return;
 
+        // Проверка: смотрим ли мы прямо на цель
         boolean isAimingAtTarget = mc.crosshairTarget instanceof EntityHitResult hitResult 
                 && hitResult.getEntity() == currentTarget;
 
@@ -97,34 +95,34 @@ public class LegitKillAura extends Module {
             return;
         }
 
+        // Проверка на криты
         if (critOnlySetting.isValue() && !canCrit()) return;
 
         long now = System.currentTimeMillis();
         
-        // === ЛОГИКА АТАКИ ===
+        // === АТАКА ===
         if (use19Setting.isValue()) {
             // 1.9 режим: проверяем шкалу перезарядки
-            float cooldown = mc.player.getAttackCooldownProgress(0.5F);
+            float cooldown = mc.player.getAttackCooldownProgress(0.0F);
+            if (cooldown < 0.95F) return; // Ждем полного заряда
             
-            // Ждем заполнения шкалы (0.95 = 95% для надежности)
-            // Grim ловит удары, если шкала заполнена меньше чем на 90%
-            if (cooldown < 0.95F) return;
-            
-            // Небольшая пауза, чтобы пакеты не улетали в один тик
+            // Защита от двойного клика в один тик
             if (now - lastAttackTime < 50) return; 
         } else {
-            // 1.8 режим: рандомная задержка (как раньше)
             if (now < lastAttackTime + nextAttackDelay) return;
         }
 
-        // Нанесение удара
+        // СБРОС СПРИНТА
         boolean wasSprinting = mc.player.isSprinting();
         if (sprintResetSetting.isValue() && wasSprinting) {
             mc.player.setSprinting(false);
         }
 
-        attack(currentTarget);
-        
+        // ИСПОЛЬЗУЕМ СТАНДАРТНЫЙ МЕТОД (чтобы сервер принял удар)
+        mc.interactionManager.attackEntity(mc.player, currentTarget);
+        mc.player.swingHand(Hand.MAIN_HAND);
+
+        // Возврат спринта
         if (sprintResetSetting.isValue() && wasSprinting) {
             mc.player.setSprinting(true);
         }
@@ -132,7 +130,7 @@ public class LegitKillAura extends Module {
         lastAttackTime = now;
         
         if (!use19Setting.isValue()) {
-            calculateHumanDelay(); // Обновляем задержку только для 1.8
+            calculateHumanDelay(); 
         }
     }
 
@@ -190,11 +188,6 @@ public class LegitKillAura extends Module {
         event.setCursorDeltaY(event.getCursorDeltaY() + pitchStep);
     }
 
-    private void attack(LivingEntity target) {
-        mc.getNetworkHandler().sendPacket(PlayerInteractEntityC2SPacket.attack(target, mc.player.isSneaking()));
-        mc.player.swingHand(Hand.MAIN_HAND);
-    }
-
     private void calculateHumanDelay() {
         long delay = 110;
         delay += random.nextInt(40) - 20; 
@@ -218,7 +211,8 @@ public class LegitKillAura extends Module {
             if (living instanceof PlayerEntity && !targetsSetting.isSelected("Игроки")) continue;
             if (!(living instanceof PlayerEntity) && !targetsSetting.isSelected("Мобы")) continue;
 
-            double dist = mc.player.squaredDistanceTo(living);
+            // Считаем дистанцию до хитбокса, а не до центра
+            double dist = mc.player.squaredDistanceTo(living.getBoundingBox().getCenter());
             if (dist > bestDist) continue;
 
             Vec3d diff = living.getPos().subtract(mc.player.getPos());
