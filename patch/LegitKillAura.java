@@ -5,6 +5,9 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.decoration.ArmorStandEntity;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.MaceItem;
+import net.minecraft.item.SwordItem;
 import net.minecraft.network.packet.c2s.play.PlayerInteractEntityC2SPacket;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.EntityHitResult;
@@ -31,6 +34,7 @@ public class LegitKillAura extends Module {
     private final ValueSetting speedYSetting;
     private final ValueSetting aimHeightSetting;
     private final ValueSetting smoothSetting;
+    private final BooleanSetting weaponOnlySetting; // НОВАЯ НАСТРОЙКА
     private final MultiSelectSetting targetsSetting;
 
     private final Random random = new Random();
@@ -53,6 +57,9 @@ public class LegitKillAura extends Module {
         this.speedYSetting = new ValueSetting("Скорость Y", "").setValue(4.0F).range(0.0F, 20.0F);
         this.aimHeightSetting = new ValueSetting("Часть тела", "").setValue(0.8F).range(0.0F, 1.0F);
         this.smoothSetting = new ValueSetting("Плавность", "").setValue(0.6F).range(0.1F, 1.0F);
+        
+        // НОВАЯ ГАЛОЧКА
+        this.weaponOnlySetting = new BooleanSetting("Только с оружием", "Работает только с мечом/булавой").setValue(true);
 
         this.targetsSetting = new MultiSelectSetting("Цели", "").value("Игроки", "Мобы");
         this.targetsSetting.getSelected().add("Игроки");
@@ -60,7 +67,7 @@ public class LegitKillAura extends Module {
         this.setup(
             this.rangeSetting, this.minCpsSetting, this.maxCpsSetting, this.fovSetting,
             this.speedXSetting, this.speedYSetting, this.aimHeightSetting,
-            this.smoothSetting, this.targetsSetting
+            this.smoothSetting, this.weaponOnlySetting, this.targetsSetting
         );
     }
 
@@ -68,10 +75,13 @@ public class LegitKillAura extends Module {
     public void onTick(TickEvent event) {
         if (mc.player == null || mc.world == null) return;
 
+        // Проверка на оружие
+        if (!isWeaponInHand()) return;
+
         currentTarget = findTarget();
         if (currentTarget == null) return;
 
-        // Проверка: смотрим ли мы прямо на цель (как TriggerBot)
+        // Проверка: смотрим ли мы прямо на цель
         boolean isAimingAtTarget = mc.crosshairTarget instanceof EntityHitResult hitResult 
                 && hitResult.getEntity() == currentTarget;
 
@@ -91,8 +101,11 @@ public class LegitKillAura extends Module {
     @EventHandler
     public void onMouseRotation(MouseRotationEvent event) {
         if (mc.player == null || mc.world == null) return;
+
+        // Проверка на оружие
+        if (!isWeaponInHand()) return;
         
-        // Если цели нет — ищем её только для наводки (бить пока не будем)
+        // Если цели нет — ищем её только для наводки
         if (currentTarget == null || !currentTarget.isAlive()) {
             LivingEntity targetForAim = findTarget();
             if (targetForAim != null) {
@@ -102,6 +115,17 @@ public class LegitKillAura extends Module {
         }
 
         smoothAim(event, currentTarget);
+    }
+
+    // ПРОВЕРКА: В РУКЕ МЕЧ ИЛИ БУЛАВА
+    private boolean isWeaponInHand() {
+        if (!weaponOnlySetting.isValue()) return true; // Если галочка выключена, бьем чем угодно
+        
+        ItemStack stack = mc.player.getMainHandStack();
+        if (stack == null || stack.isEmpty()) return false;
+
+        // Проверяем меч или булаву
+        return stack.getItem() instanceof SwordItem || stack.getItem() instanceof MaceItem;
     }
 
     private void smoothAim(MouseRotationEvent event, LivingEntity target) {
@@ -164,7 +188,6 @@ public class LegitKillAura extends Module {
             double dist = mc.player.squaredDistanceTo(living);
             if (dist > bestDist) continue;
 
-            // Проверка FOV, чтобы не крутить голову на 180 градусов
             Vec3d diff = living.getPos().subtract(mc.player.getPos());
             float angle = (float) Math.toDegrees(Math.atan2(diff.z, diff.x)) - 90.0F;
             if (Math.abs(normalize(angle - camera.getYaw())) > fovSetting.getValue() / 2.0F) continue;
@@ -181,4 +204,4 @@ public class LegitKillAura extends Module {
         if (angle < -180.0F) angle += 360.0F;
         return angle;
     }
-  }
+        }
