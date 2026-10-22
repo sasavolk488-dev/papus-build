@@ -26,12 +26,9 @@ public class AuraRecorder extends Module {
     public void onTick(TickEvent event) {
         if (mc.player == null) return;
 
-        // Проверяем, включили ли мы модуль
-        if (!this.isEnabled()) {
-            if (wasEnabled) {
-                wasEnabled = false;
-                // Когда выключаем - сбрасываем
-            }
+        // В Papus метод проверки включения модуля - isSilent() (возвращает true, если модуль ВЫКЛЮЧЕН)
+        if (this.isSilent()) {
+            wasEnabled = false;
             return;
         }
 
