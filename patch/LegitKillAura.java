@@ -4,6 +4,7 @@ import java.util.Random;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.decoration.ArmorStandEntity;
+import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.MaceItem;
@@ -27,14 +28,17 @@ import project.papus.implement.events.player.TickEvent;
 public class LegitKillAura extends Module {
 
     private final ValueSetting rangeSetting;
-    private final ValueSetting minCpsSetting;
-    private final ValueSetting maxCpsSetting;
     private final ValueSetting fovSetting;
     private final ValueSetting speedXSetting;
     private final ValueSetting speedYSetting;
     private final ValueSetting aimHeightSetting;
     private final ValueSetting smoothSetting;
-    private final BooleanSetting weaponOnlySetting; // НОВАЯ НАСТРОЙКА
+    
+    private final BooleanSetting weaponOnlySetting;
+    private final BooleanSetting sprintResetSetting; 
+    private final BooleanSetting critOnlySetting;    
+    private final BooleanSetting smartCritsSetting;  
+    
     private final MultiSelectSetting targetsSetting;
 
     private final Random random = new Random();
@@ -48,40 +52,40 @@ public class LegitKillAura extends Module {
     public LegitKillAura() {
         super("LegitKillAura", "Плавная аура + Триггер", ModuleCategory.PLAYER);
 
-        this.rangeSetting = new ValueSetting("Дистанция", "").setValue(3.0F).range(2.0F, 3.2F);
-        this.minCpsSetting = new ValueSetting("Min CPS", "").setValue(7F).range(1F, 15F);
-        this.maxCpsSetting = new ValueSetting("Max CPS", "").setValue(11F).range(1F, 15F);
-        this.fovSetting = new ValueSetting("FOV", "").setValue(90F).range(10F, 180F);
+        this.rangeSetting = new ValueSetting("Дистанция", "").setValue(3.0F).range(1.0F, 3.0F);
+        this.fovSetting = new ValueSetting("FOV", "").setValue(360F).range(10F, 360F);
         
-        this.speedXSetting = new ValueSetting("Скорость X", "").setValue(6.0F).range(0.0F, 20.0F);
-        this.speedYSetting = new ValueSetting("Скорость Y", "").setValue(4.0F).range(0.0F, 20.0F);
+        this.speedXSetting = new ValueSetting("Скорость X", "").setValue(8.0F).range(0.0F, 20.0F);
+        this.speedYSetting = new ValueSetting("Скорость Y", "").setValue(6.0F).range(0.0F, 20.0F);
         this.aimHeightSetting = new ValueSetting("Часть тела", "").setValue(0.8F).range(0.0F, 1.0F);
         this.smoothSetting = new ValueSetting("Плавность", "").setValue(0.6F).range(0.1F, 1.0F);
         
-        // НОВАЯ ГАЛОЧКА
-        this.weaponOnlySetting = new BooleanSetting("Только с оружием", "Работает только с мечом/булавой").setValue(true);
+        this.weaponOnlySetting = new BooleanSetting("Только с оружием", "").setValue(true);
+        this.sprintResetSetting = new BooleanSetting("Сброс спринта", "Сбрасывает спринт перед ударом").setValue(true);
+        
+        // Только криты (ждет пока ты упадешь)
+        this.critOnlySetting = new BooleanSetting("Только криты", "Бьет только при падении").setValue(false);
+        // Умные криты (бьет и так, и так)
+        this.smartCritsSetting = new BooleanSetting("Умные криты", "Бьет и критами, и обычными").setValue(true);
 
         this.targetsSetting = new MultiSelectSetting("Цели", "").value("Игроки", "Мобы");
         this.targetsSetting.getSelected().add("Игроки");
 
         this.setup(
-            this.rangeSetting, this.minCpsSetting, this.maxCpsSetting, this.fovSetting,
-            this.speedXSetting, this.speedYSetting, this.aimHeightSetting,
-            this.smoothSetting, this.weaponOnlySetting, this.targetsSetting
+            this.rangeSetting, this.fovSetting, this.speedXSetting, this.speedYSetting,
+            this.aimHeightSetting, this.smoothSetting, this.weaponOnlySetting,
+            this.sprintResetSetting, this.critOnlySetting, this.smartCritsSetting, this.targetsSetting
         );
     }
 
     @EventHandler
     public void onTick(TickEvent event) {
         if (mc.player == null || mc.world == null) return;
-
-        // Проверка на оружие
         if (!isWeaponInHand()) return;
 
         currentTarget = findTarget();
         if (currentTarget == null) return;
 
-        // Проверка: смотрим ли мы прямо на цель
         boolean isAimingAtTarget = mc.crosshairTarget instanceof EntityHitResult hitResult 
                 && hitResult.getEntity() == currentTarget;
 
@@ -90,42 +94,49 @@ public class LegitKillAura extends Module {
             return;
         }
 
+        // Только криты: ждем, пока не начнем падать
+        if (critOnlySetting.isValue() && !canCrit()) return;
+
+        // Умные криты (Smart Crits): если включены, бьет всегда. 
+        // Если ты в воздухе — это будет крит, если на земле — обычный удар.
+        // (Никаких авто-прыжков, как ты и просил)
+
         long now = System.currentTimeMillis();
         if (now >= lastAttackTime + nextAttackDelay) {
+            
+            boolean wasSprinting = mc.player.isSprinting();
+            if (sprintResetSetting.isValue() && wasSprinting) {
+                mc.player.setSprinting(false);
+            }
+
             attack(currentTarget);
+            
+            if (sprintResetSetting.isValue() && wasSprinting) {
+                mc.player.setSprinting(true);
+            }
+
             lastAttackTime = now;
-            calculateNextDelay();
+            calculateHumanDelay();
         }
     }
 
     @EventHandler
     public void onMouseRotation(MouseRotationEvent event) {
         if (mc.player == null || mc.world == null) return;
-
-        // Проверка на оружие
         if (!isWeaponInHand()) return;
-        
-        // Если цели нет — ищем её только для наводки
+
         if (currentTarget == null || !currentTarget.isAlive()) {
             LivingEntity targetForAim = findTarget();
-            if (targetForAim != null) {
-                smoothAim(event, targetForAim);
-            }
+            if (targetForAim != null) smoothAim(event, targetForAim);
             return;
         }
-
         smoothAim(event, currentTarget);
     }
 
-    // ПРОВЕРКА: В РУКЕ МЕЧ ИЛИ БУЛАВА
     private boolean isWeaponInHand() {
-        if (!weaponOnlySetting.isValue()) return true; // Если галочка выключена, бьем чем угодно
-        
+        if (!weaponOnlySetting.isValue()) return true;
         ItemStack stack = mc.player.getMainHandStack();
-        if (stack == null || stack.isEmpty()) return false;
-
-        // Проверяем меч или булаву
-        return stack.getItem() instanceof SwordItem || stack.getItem() instanceof MaceItem;
+        return !stack.isEmpty() && (stack.getItem() instanceof SwordItem || stack.getItem() instanceof MaceItem);
     }
 
     private void smoothAim(MouseRotationEvent event, LivingEntity target) {
@@ -156,8 +167,9 @@ public class LegitKillAura extends Module {
         yawStep *= (speedXSetting.getValue() / 10.0F);
         pitchStep *= (speedYSetting.getValue() / 10.0F);
 
-        yawStep = MathHelper.clamp(yawStep, -4.0F, 4.0F);
-        pitchStep = MathHelper.clamp(pitchStep, -3.0F, 3.0F);
+        // Максимальная скорость до 100
+        yawStep = MathHelper.clamp(yawStep, -100.0F, 100.0F);
+        pitchStep = MathHelper.clamp(pitchStep, -100.0F, 100.0F);
 
         event.setCursorDeltaX(event.getCursorDeltaX() + yawStep);
         event.setCursorDeltaY(event.getCursorDeltaY() + pitchStep);
@@ -168,10 +180,20 @@ public class LegitKillAura extends Module {
         mc.player.swingHand(Hand.MAIN_HAND);
     }
 
-    private void calculateNextDelay() {
-        float cps = minCpsSetting.getValue() + random.nextFloat() * (maxCpsSetting.getValue() - minCpsSetting.getValue());
-        long baseDelay = (long) (1000.0F / cps);
-        this.nextAttackDelay = Math.max(50, baseDelay + (random.nextInt(60) - 25));
+    private void calculateHumanDelay() {
+        long delay = 110;
+        delay += random.nextInt(40) - 20; 
+        
+        if (random.nextInt(100) < 10) {
+            delay += 80 + random.nextInt(70);
+        }
+        
+        this.nextAttackDelay = Math.max(70, Math.min(200, delay));
+    }
+
+    private boolean canCrit() {
+        return !mc.player.isOnGround() && !mc.player.isTouchingWater() && !mc.player.isClimbing() 
+                && mc.player.getVehicle() == null && !mc.player.hasStatusEffect(StatusEffects.BLINDNESS);
     }
 
     private LivingEntity findTarget() {
@@ -204,4 +226,4 @@ public class LegitKillAura extends Module {
         if (angle < -180.0F) angle += 360.0F;
         return angle;
     }
-        }
+            }
