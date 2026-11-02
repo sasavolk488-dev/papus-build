@@ -1,70 +1,47 @@
-name: Build Papus
+name: Build Papus Client
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Unzip
+      - name: Unzip source code
         run: |
-          mkdir -p unpacked
-          unzip -o srcready1.zip -d unpacked
-          ls -la unpacked
+          unzip srcready1.zip -d project_source
 
-      - name: Find project dir
-        id: proj
+      - name: Apply KillAura Patch
         run: |
-          cd unpacked
-          DIR=$(find . -name "build.gradle" -not -path "*/build/*" -not -path "*/.gradle/*" | head -1 | xargs dirname)
-          echo "dir=$DIR" >> $GITHUB_OUTPUT
+          # Копируем нашу новую Килл Ауру прямо внутрь распакованного проекта
+          cp patch/KillAura.java project_source/src/main/java/project/papus/implement/features/modules/player/KillAura.java
 
-      - name: Fix gradle.properties
-        run: |
-          cd unpacked/${{ steps.proj.outputs.dir }}
-          sed -i '/org.gradle.java.home/d' gradle.properties || true
-
-      - name: Patch Modules
-        run: |
-          AIM=$(find unpacked -name "AimAssist.java" -path "*player*" | head -1)
-          KA_DIR=$(dirname "$AIM")
-          
-          if [ -f "$AIM" ]; then cp patch/AimAssist.java "$AIM"; fi
-          
-          cp patch/LegitKillAura.java "$KA_DIR/LegitKillAura.java"
-          cp patch/LegitRotation.java "$KA_DIR/LegitRotation.java"
-          cp patch/KillAura.java "$KA_DIR/KillAura.java"
-          cp patch/AuraRecorder.java "$KA_DIR/AuraRecorder.java"
-
-      - name: Register Modules
-        run: |
-          REPO=$(find unpacked -name "ModuleRepository.java" | head -1)
-          
-          # Импорты
-          grep -q "import project.papus.implement.features.modules.player.LegitKillAura;" "$REPO" || sed -i '/import project.papus.implement.features.modules.player.AimAssist;/a import project.papus.implement.features.modules.player.LegitKillAura;\nimport project.papus.implement.features.modules.player.LegitRotation;\nimport project.papus.implement.features.modules.player.KillAura;\nimport project.papus.implement.features.modules.player.AuraRecorder;' "$REPO"
-          
-          # Список модулей
-          grep -q "new LegitKillAura()" "$REPO" || sed -i '/new AimAssist()/a \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new LegitKillAura(),\n\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new LegitRotation(),\n\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new KillAura(),\n\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ new AuraRecorder(),' "$REPO"
-
-      - uses: actions/setup-java@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
+          java-version: '17'
           distribution: 'temurin'
-          java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
-      - name: Build
+      - name: Build with Gradle
         run: |
-          cd unpacked/${{ steps.proj.outputs.dir }}
-          gradle build --no-daemon
+          cd project_source
+          # Умный поиск gradlew
+          GRADLEW_DIR=$(find . -name "gradlew" -type f -exec dirname {} \; | head -n 1)
+          cd "$GRADLEW_DIR"
+          chmod +x gradlew
+          ./gradlew build
 
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: papus-jar
-          path: 'unpacked/**/build/libs/*.jar'
+          name: papus-client-jar
+          path: 'project_source/**/build/libs/*.jar'
